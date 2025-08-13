@@ -1,0 +1,12 @@
+version: '3'
+services:
+  triton:
+    image: nvcr.io/nvidia/tritonserver:23.10-py3
+    ports:
+      - "8000:8000"   # HTTP endpoint
+      - "8001:8001"   # gRPC endpoint
+      - "8002:8002"   # Metrics endpoint
+    volumes:
+      - ./triton_model_repository:/models
+    command: ["tritonserver", "--model-repository=/models", "--log-verbose=1"]
+    platform: linux/amd64  # Needed for M2 Mac
