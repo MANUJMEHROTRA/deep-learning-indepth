@@ -1,0 +1,121 @@
+# requirements:
+# pip install pandas matplotlib python-pptx
+
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from pptx import Presentation
+from pptx.util import Inches
+import math
+
+# --------------- CONFIG ---------------
+INPUT_CSV = "employees.csv"   # export your Excel/SQL table here
+OUT_PNG = "org_chart.png"
+OUT_PPTX = "org_chart_slide.pptx"
+FIG_WIDTH = 16  # inches (matplotlib figure size)
+FIG_HEIGHT = 9
+NODE_W = 2.2    # inches rectangle width
+NODE_H = 0.7    # inches rectangle height
+VERT_SPACING = 1.6  # vertical spacing (inches)
+# ---------------------------------------
+
+# 1) Read data (columns: EmployeeID, EmployeeName, EmployeeLevel, ManagerID, ManagerLevel)
+df = pd.read_csv(INPUT_CSV, dtype=str).fillna("")
+
+# build mapping
+id_to_name = {r['EmployeeID']: r['EmployeeName'] for _, r in df.iterrows()}
+manager_of = {r['EmployeeID']: r['ManagerID'] for _, r in df.iterrows()}
+
+# 2) Build tree: find roots (manager missing or not in employee list)
+employees = set(df['EmployeeID'])
+roots = [eid for eid, mid in manager_of.items() if mid=="" or mid not in employees]
+if not roots:
+    # fallback: choose highest-level employees (based on EmployeeLevel) or first row
+    roots = [df.iloc[0]['EmployeeID']]
+
+# build children mapping
+children = {eid: [] for eid in employees}
+for eid, mid in manager_of.items():
+    if mid in employees and mid != "":
+        children[mid].append(eid)
+
+# 3) compute depths (BFS)
+from collections import deque
+depth = {}
+q = deque()
+for r in roots:
+    depth[r] = 0
+    q.append(r)
+while q:
+    node = q.popleft()
+    for c in children.get(node, []):
+        depth[c] = depth[node] + 1
+        q.append(c)
+
+# group nodes by depth
+levels = {}
+max_depth = 0
+for eid, d in depth.items():
+    levels.setdefault(d, []).append(eid)
+    max_depth = max(max_depth, d)
+
+# 4) compute positions: x positions evenly spaced per level, y based on depth
+positions = {}
+fig_w = FIG_WIDTH
+for d in range(max_depth+1):
+    nodes = levels.get(d, [])
+    n = len(nodes)
+    # horizontal spacing; leave margins
+    margin = 0.5
+    usable = fig_w - 2*margin
+    for i, eid in enumerate(sorted(nodes)):
+        x = margin + (i+1) * usable/(n+1)  # inches from left
+        y = d * VERT_SPACING + 0.5       # inches from top
+        positions[eid] = (x, y)
+
+# 5) draw using matplotlib
+dpi = 100
+fig = plt.figure(figsize=(FIG_WIDTH, FIG_HEIGHT), dpi=dpi)
+ax = fig.add_axes([0,0,1,1])
+ax.set_xlim(0, FIG_WIDTH)
+ax.set_ylim((max_depth+2)*VERT_SPACING, 0)  # invert y so 0 at top
+ax.axis('off')
+
+# helper to convert inches coords to fig coords (matplotlib uses same inches coords because we set xlim/ylim)
+for eid, (x, y) in positions.items():
+    cx = x
+    cy = y
+    # draw connectors from manager to employee
+    mid = manager_of.get(eid, "")
+    if mid and mid in positions:
+        mx, my = positions[mid]
+        # draw a line from bottom center of manager rectangle to top center of this node
+        x0 = mx
+        y0 = my + NODE_H
+        x1 = cx
+        y1 = cy
+        ax.plot([x0, x1], [y0, y1], linewidth=1)
+
+# draw rectangles and text
+for eid, (x, y) in positions.items():
+    left = x - NODE_W/2
+    top = y
+    rect = Rectangle((left, top), NODE_W, NODE_H, linewidth=1, fill=True, facecolor='white', edgecolor='black')
+    ax.add_patch(rect)
+    name = id_to_name.get(eid, eid)
+    # text inside rectangle (wrapped if necessary)
+    ax.text(x, y + NODE_H/2, f"{name}\n({eid})", ha='center', va='center', fontsize=10)
+
+# save
+plt.savefig(OUT_PNG, bbox_inches='tight', dpi=dpi)
+plt.close(fig)
+
+# 6) Create PPT and insert image full-slide
+prs = Presentation()
+blank_slide_layout = prs.slide_layouts[6]  # blank
+slide = prs.slides.add_slide(blank_slide_layout)
+left = top = Inches(0)
+slide.shapes.add_picture(OUT_PNG, left, top, width=prs.slide_width, height=prs.slide_height)
+prs.save(OUT_PPTX)
+
+print("Generated:", OUT_PNG, OUT_PPTX)
